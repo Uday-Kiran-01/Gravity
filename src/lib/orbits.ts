@@ -4,7 +4,7 @@
 import type { Orbit, Entry } from "@/types";
 import { getAllOrbits, getEntriesByOrbit } from "./db";
 
-/** Get orbits organized as a flat list sorted by activity */
+/** Get orbits with their entries (heavy — used only for detail views) */
 export async function getActiveOrbits(): Promise<
   (Orbit & { entries: Entry[] })[]
 > {
@@ -16,6 +16,11 @@ export async function getActiveOrbits(): Promise<
     })
   );
   return result;
+}
+
+/** Get orbit metadata only — no entries loaded. Fast, for listing pages. */
+export async function getOrbitSummaries(): Promise<Orbit[]> {
+  return getAllOrbits();
 }
 
 /** Build a tree structure from flat orbits (for future hierarchy visualization) */

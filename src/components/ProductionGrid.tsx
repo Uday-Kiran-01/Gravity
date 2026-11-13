@@ -2,7 +2,8 @@
 
 import { useEffect, useState } from "react";
 import type { WritingSession } from "@/types";
-import { getAllSessions } from "@/lib/db";
+import { getAllSessions, getWritingStreak } from "@/lib/db";
+import { Flame } from "lucide-react";
 
 interface ProductionGridProps { refreshTrigger?: number; }
 
@@ -11,8 +12,18 @@ export default function ProductionGrid({ refreshTrigger }: ProductionGridProps) 
   const [totalWords, setTotalWords] = useState(0);
   const [totalEntries, setTotalEntries] = useState(0);
   const [totalDays, setTotalDays] = useState(0);
+  const [streak, setStreak] = useState({ current: 0, longest: 0 });
 
-  useEffect(() => { (async () => { const d = await getAllSessions(); setSessions(d); setTotalWords(d.reduce((s, x) => s + x.totalWords, 0)); setTotalEntries(d.reduce((s, x) => s + x.entryCount, 0)); setTotalDays(d.length); })(); }, [refreshTrigger]);
+  useEffect(() => {
+    (async () => {
+      const d = await getAllSessions();
+      setSessions(d);
+      setTotalWords(d.reduce((s, x) => s + x.totalWords, 0));
+      setTotalEntries(d.reduce((s, x) => s + x.entryCount, 0));
+      setTotalDays(d.length);
+      setStreak(await getWritingStreak());
+    })();
+  }, [refreshTrigger]);
 
   const heatmapData = (() => {
     const today = new Date();
@@ -40,11 +51,13 @@ export default function ProductionGrid({ refreshTrigger }: ProductionGridProps) 
     <div className="bg-white dark:bg-zinc-950 border-t border-zinc-200 dark:border-zinc-900">
       <div className="max-w-3xl mx-auto px-4 py-8">
         <div className="flex items-center justify-between mb-6">
-          <h2 className="text-sm font-medium text-zinc-500 dark:text-zinc-400 uppercase tracking-wider">Production</h2>
+          <h2 className="text-sm font-medium text-zinc-500 dark:text-zinc-400 uppercase tracking-wider">Activity</h2>
           <div className="flex items-center gap-6 text-xs text-zinc-400 dark:text-zinc-500">
             <span><span className="text-zinc-700 dark:text-zinc-300 font-medium">{totalEntries}</span> entries</span>
             <span><span className="text-zinc-700 dark:text-zinc-300 font-medium">{totalWords.toLocaleString()}</span> words</span>
             <span><span className="text-zinc-700 dark:text-zinc-300 font-medium">{totalDays}</span> active days</span>
+            {streak.current > 0 && <span className="flex items-center gap-1"><Flame className="w-3 h-3 text-orange-400" /><span className="text-zinc-700 dark:text-zinc-300 font-medium">{streak.current}</span> day streak</span>}
+            {streak.longest > 0 && <span className="hidden sm:inline">best: <span className="text-zinc-700 dark:text-zinc-300 font-medium">{streak.longest}</span></span>}
           </div>
         </div>
         <div className="flex gap-1">

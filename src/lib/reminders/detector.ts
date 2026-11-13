@@ -222,6 +222,7 @@ function excerpt(text: string, position: number, length = 150): string {
 
 /** Generate a short title from the text and detected type */
 function generateTitle(text: string, detected: string, _type: ReminderType): string {
+  void _type; // reserved for type-specific title generation
   // Clean up the detected string
   const clean = detected
     .replace(/^(?:I\s+(?:should|need to|must|have to|gotta|want to|plan to|hope to))\s+/i, "")

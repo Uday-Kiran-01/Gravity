@@ -1,13 +1,11 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import CommandPalette from "@/components/CommandPalette";
 
 export const metadata: Metadata = {
-  title: "Gravity: Everything Falls Into Place",
-  description:
-    "An AI-first thinking environment. Write. Walk away. Everything else happens automatically.",
-  icons: {
-    icon: "/favicon.ico",
-  },
+  title: "Gravity - You think. It lands.",
+  description: "Write. Walk away. Your thoughts find where they belong.",
+  icons: { icon: "/favicon.ico" },
 };
 
 export default function RootLayout({
@@ -40,6 +38,7 @@ export default function RootLayout({
       </head>
       <body className="min-h-screen bg-white dark:bg-zinc-950 text-zinc-900 dark:text-zinc-200 antialiased">
         {children}
+        <CommandPalette />
       </body>
     </html>
   );

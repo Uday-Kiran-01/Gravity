@@ -133,6 +133,7 @@ export function buildResurfaceReminder(
   match: ResurfaceMatch,
   _newEntryId: string
 ): Omit<Reminder, "id" | "createdAt" | "shownAt" | "dismissedAt"> {
+  void _newEntryId; // reserved for future use
   const excerpt =
     match.oldEntry.content.length > 120
       ? match.oldEntry.content.slice(0, 117) + "..."
@@ -155,4 +156,53 @@ export function buildResurfaceReminder(
     orbitId: match.oldEntry.orbitId,
     status: "pending",
   };
+}
+
+/** Quick duplicate check: find entries very similar to new content */
+export async function checkDuplicates(
+  content: string,
+  excludeId?: string,
+  threshold = 0.3
+): Promise<{ entry: Entry; similarity: number } | null> {
+  const newKeywords = extractKeywords(content);
+  if (newKeywords.length < 3) return null;
+
+  // Get entries from the LAST 30 days (not older than 30 days!)
+  const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+  const { getSupabase } = await import("@/lib/supabase");
+  const { data } = await (getSupabase() as any).from("entries")
+    .select("id,content,created_at,orbit_id")
+    .eq("user_id", "gravity-user")
+    .neq("status", "draft")
+    .neq("status", "trashed")
+    .gte("created_at", thirtyDaysAgo)
+    .order("created_at", { ascending: false })
+    .limit(100);
+
+  const recentEntries: Entry[] = (data || []).map((row: Record<string, unknown>) => ({
+    id: row.id as string,
+    content: row.content as string,
+    createdAt: new Date(row.created_at as string).getTime(),
+    updatedAt: 0,
+    wordCount: 0,
+    status: "classified" as const,
+    orbitId: (row.orbit_id as string) || null,
+    tags: [],
+    trashedAt: null,
+    editedAt: null,
+  }));
+
+  let bestMatch: { entry: Entry; similarity: number } | null = null;
+
+  for (const oldEntry of recentEntries) {
+    if (excludeId && oldEntry.id === excludeId) continue; // Skip self
+    const oldKeywords = extractKeywords(oldEntry.content);
+    if (oldKeywords.length < 3) continue;
+    const similarity = diceSimilarity(newKeywords, oldKeywords);
+    if (similarity >= threshold && (!bestMatch || similarity > bestMatch.similarity)) {
+      bestMatch = { entry: oldEntry, similarity };
+    }
+  }
+
+  return bestMatch;
 }

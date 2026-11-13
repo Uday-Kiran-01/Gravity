@@ -6,12 +6,15 @@ export interface Entry {
   content: string;
   createdAt: number; // Unix timestamp ms
   updatedAt: number;
+  editedAt: number | null;
   wordCount: number;
   status: EntryStatus;
   orbitId: string | null;
+  tags: string[];
+  trashedAt: number | null;
 }
 
-export type EntryStatus = "draft" | "processing" | "classified" | "unclassified";
+export type EntryStatus = "draft" | "processing" | "classified" | "unclassified" | "trashed";
 
 /** An Orbit: a discovered cluster of thinking */
 export interface Orbit {
@@ -33,6 +36,8 @@ export interface ClassificationResult {
   orbitName?: string;
   confidence: number;
   reasoning?: string;
+  /** AI's semantic relevance score (0-1) for each orbit by ID — meaning, not keywords */
+  orbitRelevance?: Record<string, number>;
 }
 
 /** Abstraction for any AI provider */

@@ -1,5 +1,5 @@
 // ─── Supabase Client ───
-// Simple browser client — no auth, no cookies. Just anon access.
+// Simple browser client - no auth, no cookies. Just anon access.
 
 import { createClient } from "@supabase/supabase-js";
 

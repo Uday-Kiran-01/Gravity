@@ -24,8 +24,11 @@ CREATE TABLE IF NOT EXISTS entries (
   created_at TIMESTAMPTZ DEFAULT now(),
   updated_at TIMESTAMPTZ DEFAULT now(),
   word_count INTEGER DEFAULT 0,
-  status TEXT DEFAULT 'draft' CHECK (status IN ('draft', 'processing', 'classified', 'unclassified')),
-  orbit_id UUID REFERENCES orbits(id) ON DELETE SET NULL
+  status TEXT DEFAULT 'draft' CHECK (status IN ('draft', 'processing', 'classified', 'unclassified', 'trashed')),
+  orbit_id UUID REFERENCES orbits(id) ON DELETE SET NULL,
+  tags TEXT[] DEFAULT '{}',
+  edited_at TIMESTAMPTZ,
+  trashed_at TIMESTAMPTZ
 );
 
 CREATE TABLE IF NOT EXISTS sessions (
@@ -67,3 +70,11 @@ ALTER TABLE orbits DISABLE ROW LEVEL SECURITY;
 ALTER TABLE entries DISABLE ROW LEVEL SECURITY;
 ALTER TABLE sessions DISABLE ROW LEVEL SECURITY;
 ALTER TABLE reminders DISABLE ROW LEVEL SECURITY;
+
+-- ─── Migration: Add tags, trash, edited_at (run if upgrading existing DB) ───
+-- ALTER TABLE entries ADD COLUMN IF NOT EXISTS tags TEXT[] DEFAULT '{}';
+-- ALTER TABLE entries ADD COLUMN IF NOT EXISTS edited_at TIMESTAMPTZ;
+-- ALTER TABLE entries ADD COLUMN IF NOT EXISTS trashed_at TIMESTAMPTZ;
+-- ALTER TABLE entries DROP CONSTRAINT IF EXISTS entries_status_check;
+-- ALTER TABLE entries ADD CONSTRAINT entries_status_check CHECK (status IN ('draft', 'processing', 'classified', 'unclassified', 'trashed'));
+-- CREATE INDEX IF NOT EXISTS idx_entries_trashed ON entries(user_id, trashed_at) WHERE trashed_at IS NOT NULL;

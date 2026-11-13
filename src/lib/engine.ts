@@ -8,23 +8,31 @@ import {
   updateEntryStatus,
   createOrbit,
   getAllOrbits,
+  getEntriesByOrbit,
   addReminder,
   hasActiveReminderForEntry,
 } from "./db";
 import { detectReminders } from "./reminders/detector";
-import { findDormantIdeas, buildResurfaceReminder } from "./reminders/resurface";
+import { findDormantIdeas, buildResurfaceReminder, checkDuplicates } from "./reminders/resurface";
+import { calculateOrbitGravity, detectSubOrbits, keywordCluster } from "./ai/classifier";
+import { OrbitEntryCache, contentHash } from "./cache";
 
 type EngineState = "idle" | "typing" | "waiting" | "processing" | "done";
+export type { EngineState };
 
 interface EngineCallbacks {
-  /** Called when classification is complete and entry has been routed */
   onClassified: (result: ClassificationResult) => void;
-  /** Called when a new pattern is found but needs user confirmation */
   onNewPattern: (spaceName: string, confidence: number) => Promise<boolean>;
-  /** Called when a new reminder is detected */
   onReminderDetected?: (reminder: Reminder) => void;
-  /** Called when the engine state changes */
   onStateChange?: (state: EngineState) => void;
+  onError?: (message: string) => void;
+  onDuplicateDetected?: (existingContent: string, orbitName: string | null, similarity: number, existingEntryId: string, existingOrbitId: string | null) => Promise<boolean>;
+}
+
+export interface OrgSuggestion {
+  orbitId: string;
+  orbitName: string;
+  groups: { name: string; entryIds: string[]; entryPreviews: string[] }[];
 }
 
 export class GravityEngine {
@@ -33,7 +41,7 @@ export class GravityEngine {
   private state: EngineState = "idle";
   private idleTimer: ReturnType<typeof setTimeout> | null = null;
   private lastActivity = Date.now();
-  private readonly IDLE_THRESHOLD_MS = 5 * 60 * 1000; // 5 minutes
+  private readonly IDLE_THRESHOLD_MS = 60 * 1000; // 1 minute
   private currentEntry: Entry | null = null;
 
   constructor(aiProvider: AIProvider, callbacks: EngineCallbacks) {
@@ -53,13 +61,11 @@ export class GravityEngine {
     this.resetIdleTimer();
   }
 
-  /** Call this when the user stops typing */
+  /** Called when the Landfill detects user has been idle for 5 minutes */
   onUserIdle(): void {
     this.setState("waiting");
-    this.resetIdleTimer();
-    this.idleTimer = setTimeout(() => {
-      this.processCurrentEntry();
-    }, this.IDLE_THRESHOLD_MS);
+    this.clearIdleTimer();
+    this.processCurrentEntry();
   }
 
   /** Force-process the current entry immediately */
@@ -77,6 +83,39 @@ export class GravityEngine {
   /** Clean up timers */
   destroy(): void {
     this.clearIdleTimer();
+  }
+
+  /** Manually trigger orbit organization - called when user clicks Re-organize */
+  async organizeOrbit(orbitId: string): Promise<void> {
+    try {
+      const entries = await getEntriesByOrbit(orbitId);
+      if (entries.length < 6) return;
+
+      const allOrbits = await getAllOrbits();
+      const hasChildren = allOrbits.some(o => o.parentOrbitId === orbitId);
+      if (hasChildren) return;
+
+      const orbit = allOrbits.find(o => o.id === orbitId);
+      if (!orbit) return;
+
+      let groups = await detectSubOrbits(orbit.name, entries.map(e => ({ id: e.id, content: e.content })));
+      if (!groups || groups.length === 0) {
+        groups = keywordCluster(entries.map(e => ({ id: e.id, content: e.content })));
+      }
+      if (!groups || groups.length < 2) return;
+
+      for (const group of groups.filter(g => g.entryIds.length >= 2)) {
+        const subOrbit = await createOrbit(group.name, true, orbitId);
+        const { updateOrbit } = await import("./db");
+        await updateOrbit(subOrbit.id, { color: group.color });
+        for (const entryId of group.entryIds) {
+          await updateEntryStatus(entryId, "classified", subOrbit.id);
+        }
+      }
+      console.log(`[Gravity] Organized "${orbit.name}" → ${groups.length} sub-orbits`);
+    } catch (e) {
+      console.error("[Gravity] Organization failed:", e);
+    }
   }
 
   // ─── Private ───
@@ -110,6 +149,25 @@ export class GravityEngine {
       // Mark as processing
       await updateEntryStatus(entry.id, "processing");
 
+      // ─── Duplicate Detection (with content hash pre-filter) ───
+      const hash = contentHash(entry.content);
+      const dup = hash ? await checkDuplicates(entry.content, entry.id) : null;
+      if (dup && this.callbacks.onDuplicateDetected) {
+        const orbitName = dup.entry.orbitId
+          ? existingOrbits.find(o => o.id === dup.entry.orbitId)?.name || null
+          : null;
+        const proceed = await this.callbacks.onDuplicateDetected(
+          dup.entry.content.slice(0, 120), orbitName, dup.similarity, dup.entry.id, dup.entry.orbitId
+        );
+        if (!proceed) {
+          // User chose not to add duplicate — just mark as draft and stop
+          await updateEntryStatus(entry.id, "draft", null);
+          this.setState("done");
+          this.currentEntry = null;
+          return;
+        }
+      }
+
       let result: ClassificationResult;
 
       // Try the AI provider first
@@ -121,14 +179,57 @@ export class GravityEngine {
         );
       } catch {
         // AI failed, fall back to unclassified
+        this.callbacks.onError?.("AI classification failed. Entry saved to Nest.");
         result = { type: "unclassified", confidence: 0 };
       }
 
-      // Handle the classification result
+      // ─── Low-confidence fallback: if AI has no clue, save to Nest ───
+      if (result.confidence < 0.5) {
+        await updateEntryStatus(entry.id, "unclassified", null);
+        this.callbacks.onClassified({ type: "unclassified", confidence: result.confidence });
+        this.setState("done"); this.currentEntry = null;
+        return;
+      }
+
+      // Handle the classification result — verify with gravitational scoring
       if (result.type === "existing_pattern" && result.orbitId) {
-        // Route to existing orbit
-        await updateEntryStatus(entry.id, "classified", result.orbitId);
-        this.callbacks.onClassified(result);
+        // Warm orbit entry cache to avoid N DB calls
+        await OrbitEntryCache.warm(existingOrbits);
+        // Run gravitational scoring — blends AI semantic meaning (50%) with mechanical factors
+        const gravityScores = await calculateOrbitGravity(entry.content, existingOrbits, result.orbitRelevance);
+        const topScore = gravityScores[0];
+        const aiPickScore = gravityScores.find(g => g.orbit.id === result.orbitId);
+        
+        // If another orbit has significantly higher gravity, override AI
+        if (topScore && aiPickScore && topScore.orbit.id !== result.orbitId && topScore.score > aiPickScore.score * 1.3) {
+          // Stronger gravity elsewhere — use that orbit instead
+          await updateEntryStatus(entry.id, "classified", topScore.orbit.id);
+          this.callbacks.onClassified({
+            type: "existing_pattern", orbitId: topScore.orbit.id, orbitName: topScore.orbit.name, confidence: topScore.score,
+          });
+          this.setState("done"); this.currentEntry = null;
+          await this.detectAndCreateReminders({ ...entry, orbitId: topScore.orbit.id });
+          return;
+        }
+
+        // Confidence threshold: if AI isn't confident, treat as new pattern
+        if (result.confidence < 0.75 && result.orbitName) {
+          const approved = await this.callbacks.onNewPattern(
+            result.orbitName + " (uncertain match)",
+            result.confidence
+          );
+          if (approved) {
+            await updateEntryStatus(entry.id, "classified", result.orbitId);
+            this.callbacks.onClassified(result);
+          } else {
+            await updateEntryStatus(entry.id, "unclassified", null);
+            this.callbacks.onClassified({ type: "unclassified", confidence: 0 });
+          }
+        } else {
+          // Route to existing orbit
+          await updateEntryStatus(entry.id, "classified", result.orbitId);
+          this.callbacks.onClassified(result);
+        }
       } else if (result.type === "new_pattern" && result.orbitName) {
         // Ask user for confirmation
         const approved = await this.callbacks.onNewPattern(
@@ -167,6 +268,7 @@ export class GravityEngine {
       await this.detectAndCreateReminders(entry);
     } catch (error) {
       console.error("Gravity engine processing error:", error);
+      this.callbacks.onError?.("Something went wrong. Your entry is safe.");
       if (this.currentEntry) {
         await updateEntryStatus(this.currentEntry.id, "unclassified", null);
       }
@@ -179,10 +281,17 @@ export class GravityEngine {
   /** Run reminder detection on a classified entry */
   private async detectAndCreateReminders(entry: Entry): Promise<void> {
     try {
+      // Skip reminder detection for very short / low-quality entries
+      if (entry.wordCount < 5) return;
+
       // 1. Rule-based reminder detection (dates, deadlines, commitments, intentions)
       const detected = detectReminders(entry.content);
 
       for (const d of detected) {
+        // Skip reminders with empty or nonsensical titles
+        const title = d.title?.trim() || "";
+        if (title.length < 5 || title.length > 120) continue;
+
         const reminder = await addReminder({
           entryId: entry.id,
           type: d.type,

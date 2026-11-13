@@ -1,7 +1,7 @@
 "use client";
 
-import { useState } from "react";
-import { Sparkles, X } from "lucide-react";
+import { useState, useEffect } from "react";
+import { Sparkles } from "lucide-react";
 
 interface ConfirmationModalProps {
   orbitName: string;
@@ -15,6 +15,12 @@ export default function ConfirmationModal({ orbitName, confidence, onConfirm, on
   const decline = () => { setClosing(true); setTimeout(onDecline, 200); };
   const confirm = () => { setClosing(true); setTimeout(onConfirm, 200); };
 
+  // Auto-dismiss after 30 seconds
+  useEffect(() => {
+    const timer = setTimeout(decline, 10000);
+    return () => clearTimeout(timer);
+  }, []);
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 dark:bg-black/60 backdrop-blur-sm">
       <div className={`bg-zinc-50 dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl p-6 max-w-sm w-full mx-4 shadow-2xl transition-all duration-200 ${closing ? "opacity-0 scale-95" : "opacity-100 scale-100"}`}>
@@ -25,7 +31,6 @@ export default function ConfirmationModal({ orbitName, confidence, onConfirm, on
             </div>
             <span className="text-sm text-zinc-500 dark:text-zinc-400">Gravity noticed a new pattern</span>
           </div>
-          <button onClick={decline} className="text-zinc-400 dark:text-zinc-500 hover:text-zinc-600 dark:hover:text-zinc-300 transition-colors"><X className="w-4 h-4" /></button>
         </div>
         <h2 className="text-xl font-semibold text-zinc-900 dark:text-zinc-100 mb-2">&ldquo;{orbitName}&rdquo;</h2>
         <p className="text-sm text-zinc-500 dark:text-zinc-400 mb-6">Create this memory orbit? Future notes like this will be automatically routed here.</p>

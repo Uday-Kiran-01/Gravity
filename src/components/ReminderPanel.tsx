@@ -49,7 +49,7 @@ export default function ReminderPanel({ refreshTrigger, onNavigate }: ReminderPa
   if (!loading && reminders.length === 0) return null;
 
   return (
-    <div className="fixed bottom-20 left-1/2 -translate-x-1/2 z-40 w-full max-w-md px-4">
+    <div className="w-full max-w-md mx-auto px-4 pb-4">
       {loading && reminders.length === 0 && (
         <div className="text-center">
           <div className="inline-block px-4 py-2 rounded-full bg-zinc-100/80 dark:bg-zinc-900/80 backdrop-blur-sm border border-zinc-200/50 dark:border-zinc-800/50 text-xs text-zinc-400 dark:text-zinc-500 animate-pulse">Checking for reminders...</div>
